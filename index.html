@@ -159,9 +159,20 @@ function fitDisk(){
   draw();
 }
 
+/* While a sequence is still loading it is a sparse array, so index maps to a
+   fixed time slot and gaps fall back to the closest frame already in hand. */
+function frameAt(i){
+  if (frames[i]) return frames[i];
+  for (let d = 1; d < frames.length; d++){
+    if (frames[i-d]) return frames[i-d];
+    if (frames[i+d]) return frames[i+d];
+  }
+  return null;
+}
+
 function draw(){
   ctx.clearRect(0, 0, W, H);
-  const f = frames[idx];
+  const f = frameAt(idx);
   if (!f || !meta) return;
   const dw = meta.w * meta.scale / view.spp;
   const dh = meta.h * meta.scale / view.spp;
@@ -259,15 +270,30 @@ async function loadSequence(newMeta, label){
   setStatus(label + " 0/" + n);
   document.getElementById("banner").style.display = "none";
 
+  /* Workers fill `out` in place. The first frame to land swaps it in as the
+     live sequence and starts playback, so the canvas fills at roughly the
+     latency of one request rather than of the whole set. Until then the
+     previous movie keeps playing, and a load that fails outright leaves it
+     untouched. */
   const out = new Array(n);
-  let done = 0, errs = 0, cursor = 0;
+  let done = 0, errs = 0, cursor = 0, live = false;
   const worker = async () => {
     while (cursor < n){
       const i = cursor++;
       if (token !== loadToken) return;
       try {
         const img = await loadImage(urlFor(dates[i], newMeta.scale, newMeta.cx, newMeta.cy, newMeta.w, newMeta.h));
+        if (token !== loadToken) return;
         out[i] = {img, date: dates[i]};
+        if (!live){
+          live = true;
+          frames = out; meta = newMeta; idx = i;
+          const scrub = document.getElementById("scrub");
+          scrub.max = n - 1; scrub.value = i;
+          updateStamp();
+          if (!playing) togglePlay();
+        }
+        if (frameAt(idx) === out[i]) draw();
       } catch { errs++; }
       done++;
       if (token === loadToken) setStatus(label + " " + done + "/" + n);
@@ -297,12 +323,7 @@ async function loadSequence(newMeta, label){
     }
     return;
   }
-  frames = ok; meta = newMeta; idx = frames.length - 1;
-  const scrub = document.getElementById("scrub");
-  scrub.max = frames.length - 1; scrub.value = idx;
   setStatus(ok.length + " frames" + (errs ? " (" + errs + " failed)" : ""));
-  updateStamp(); draw();
-  if (!playing) togglePlay();
 }
 
 function loadFullDisk(){
@@ -340,7 +361,7 @@ function tick(t){
   requestAnimationFrame(tick);
 }
 function updateStamp(){
-  const f = frames[idx];
+  const f = frameAt(idx);
   if (!f) return;
   document.getElementById("stamp").textContent =
     "AIA " + wl + " \u00b7 " + f.date.toISOString().slice(0, 16).replace("T", " ") + " UT";
