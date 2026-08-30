@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>AIA Movie Viewer</title>
+<style>
+  :root{
+    --bg:#000000;
+    --panel:rgba(16,16,20,.86);
+    --line:rgba(255,255,255,.14);
+    --text:#e8e6e1;
+    --dim:#9b978f;
+    --accent:#e4573d; /* follows selected channel */
+  }
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);
+    font:14px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    font-variant-numeric:tabular-nums;position:fixed;width:100%}
+  #stage{position:absolute;inset:0;touch-action:none}
+  canvas{display:block;width:100%;height:100%}
+
+  /* top panel */
+  #top{position:absolute;top:0;left:0;right:0;background:var(--panel);
+    backdrop-filter:blur(10px);border-bottom:1px solid var(--line);
+    padding:calc(env(safe-area-inset-top) + 8px) 10px 8px}
+  #chips{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}
+  #chips::-webkit-scrollbar{display:none}
+  .chip{flex:0 0 auto;border:1px solid var(--line);border-radius:14px;
+    padding:5px 12px;color:var(--dim);background:transparent;font-size:13px}
+  .chip.on{color:#000;font-weight:600;border-color:transparent}
+  #opts{display:flex;gap:6px;margin-top:8px;align-items:center;flex-wrap:wrap}
+  select,button{font:inherit;color:var(--text);background:rgba(255,255,255,.06);
+    border:1px solid var(--line);border-radius:8px;padding:6px 10px;appearance:none}
+  button:active{background:rgba(255,255,255,.16)}
+  #loadBtn{background:var(--accent);border-color:transparent;color:#000;font-weight:600}
+  #status{color:var(--dim);font-size:12px;margin-top:6px;min-height:15px}
+
+  /* bottom transport */
+  #bottom{position:absolute;left:0;right:0;bottom:0;background:var(--panel);
+    backdrop-filter:blur(10px);border-top:1px solid var(--line);
+    padding:8px 12px calc(env(safe-area-inset-bottom) + 8px)}
+  #transport{display:flex;align-items:center;gap:10px}
+  #playBtn{width:42px;height:42px;border-radius:50%;flex:0 0 auto;
+    font-size:16px;display:flex;align-items:center;justify-content:center}
+  #scrub{flex:1;accent-color:var(--accent)}
+  input[type=range]{height:28px}
+  #row2{display:flex;align-items:center;gap:10px;margin-top:4px;font-size:12px;color:var(--dim)}
+  #stamp{flex:1}
+  #fps{width:90px;accent-color:var(--accent)}
+  .mini{padding:4px 9px;font-size:12px;border-radius:7px}
+
+  #banner{position:absolute;left:12px;right:12px;top:50%;transform:translateY(-50%);
+    background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:16px;display:none;text-align:left}
+  #banner b{display:block;margin-bottom:6px}
+  #banner p{color:var(--dim);font-size:13px}
+
+  #toggleTop{position:absolute;right:10px;background:transparent;border:none;
+    color:var(--dim);font-size:12px;padding:6px}
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="cv"></canvas></div>
+
+<div id="top">
+  <button id="toggleTop">hide</button>
+  <div id="chips"></div>
+  <div id="opts">
+    <select id="dur">
+      <option value="6">6 h</option>
+      <option value="12">12 h</option>
+      <option value="24" selected>24 h</option>
+      <option value="48">48 h</option>
+    </select>
+    <select id="nf">
+      <option value="24">24 frames</option>
+      <option value="48" selected>48 frames</option>
+      <option value="96">96 frames</option>
+    </select>
+    <select id="res">
+      <option value="1024" selected>1k frames</option>
+      <option value="2048">2k frames</option>
+      <option value="4096">4k frames</option>
+    </select>
+    <button id="loadBtn">Load movie</button>
+    <button id="hdBtn" class="mini">Sharpen view</button>
+    <button id="fitBtn" class="mini">Fit disk</button>
+  </div>
+  <div id="status"></div>
+</div>
+
+<div id="bottom">
+  <div id="transport">
+    <button id="playBtn">&#9654;</button>
+    <input id="scrub" type="range" min="0" max="0" value="0" step="1">
+  </div>
+  <div id="row2">
+    <span id="stamp">no data loaded</span>
+    <span id="fpsLbl">12 fps</span>
+    <input id="fps" type="range" min="2" max="30" value="12" step="1">
+  </div>
+</div>
+
+<div id="banner">
+  <b>Couldn't reach api.helioviewer.org</b>
+  <p>If you're viewing this inside a sandboxed preview, external requests may be
+  blocked. Save this file and open it in Safari or Chrome, then reload. The
+  Helioviewer server itself can also be briefly down; retrying later helps.</p>
+</div>
+
+<script>
+"use strict";
+
+/* ---------- channels (standard AIA colormap hues for the chips) ---------- */
+const CHANNELS = [
+  {wl:171, c:"#f2b53e"}, {wl:193, c:"#d98a2b"}, {wl:211, c:"#c77ee0"},
+  {wl:304, c:"#e4573d"}, {wl:335, c:"#4f7bdc"}, {wl:131, c:"#6fd8d3"},
+  {wl:94,  c:"#7fae4a"}, {wl:1600,c:"#c9c94a"}, {wl:1700,c:"#d7a8a0"},
+];
+const API = "https://api.helioviewer.org/v2/takeScreenshot/";
+const NATIVE = 0.6;           // arcsec / px, AIA native plate scale
+const DISK_SPAN = 2478;       // arcsec covered by full-disk request
+function framePx(){ return +document.getElementById("res").value; }
+function memWarn(n, w, h){
+  const mb = n * w * h * 4 / 1e6;
+  return mb > 500 ? " \u2014 ~" + Math.round(mb/100)/10 + " GB decoded, may crash mobile browsers" : "";
+}
+
+/* ---------- state ---------- */
+let wl = 304;
+let frames = [];              // {img, date}
+let meta = null;              // {scale, cx, cy, w, h} of current frame set
+let idx = 0, playing = false, fps = 12, lastTick = 0;
+let view = {cx:0, cy:0, spp:1};   // arcsec center + arcsec per CSS px
+let loadToken = 0;
+
+/* ---------- canvas ---------- */
+const cv = document.getElementById("cv");
+const ctx = cv.getContext("2d");
+let W = 0, H = 0, DPR = 1;
+function resize(){
+  DPR = Math.min(window.devicePixelRatio || 1, 3);
+  W = cv.clientWidth; H = cv.clientHeight;
+  cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.imageSmoothingEnabled = true;
+  draw();
+}
+window.addEventListener("resize", resize);
+
+function fitDisk(){
+  view.cx = 0; view.cy = 0;
+  view.spp = 2200 / Math.min(W, H);   // disk ≈1920″ + margin
+  draw();
+}
+
+function draw(){
+  ctx.clearRect(0, 0, W, H);
+  const f = frames[idx];
+  if (!f || !meta) return;
+  const dw = meta.w * meta.scale / view.spp;
+  const dh = meta.h * meta.scale / view.spp;
+  const dx = W/2 + (meta.cx - view.cx)/view.spp - dw/2;
+  const dy = H/2 + (meta.cy - view.cy)/view.spp - dh/2;
+  ctx.imageSmoothingEnabled = (meta.scale / view.spp) < 1.5; // crisp when deeply zoomed
+  ctx.drawImage(f.img, dx, dy, dw, dh);
+}
+
+/* ---------- gestures: pan / pinch / double-tap / wheel ---------- */
+const ptrs = new Map();
+let lastMid = null, lastDist = 0, lastTapT = 0, lastTapX = 0, lastTapY = 0;
+
+function zoomAbout(px, py, factor){
+  const ax = view.cx + (px - W/2) * view.spp;
+  const ay = view.cy + (py - H/2) * view.spp;
+  view.spp = Math.min(Math.max(view.spp / factor, 0.05), 20);
+  view.cx = ax - (px - W/2) * view.spp;
+  view.cy = ay - (py - H/2) * view.spp;
+  draw();
+}
+
+const stage = document.getElementById("stage");
+stage.addEventListener("pointerdown", e => {
+  stage.setPointerCapture(e.pointerId);
+  ptrs.set(e.pointerId, {x:e.clientX, y:e.clientY});
+  if (ptrs.size === 1){
+    const t = performance.now();
+    if (t - lastTapT < 300 && Math.hypot(e.clientX-lastTapX, e.clientY-lastTapY) < 30){
+      zoomAbout(e.clientX, e.clientY, 2);
+      lastTapT = 0;
+    } else { lastTapT = t; lastTapX = e.clientX; lastTapY = e.clientY; }
+  }
+  if (ptrs.size === 2){
+    const [a, b] = [...ptrs.values()];
+    lastDist = Math.hypot(a.x-b.x, a.y-b.y);
+    lastMid = {x:(a.x+b.x)/2, y:(a.y+b.y)/2};
+  }
+});
+stage.addEventListener("pointermove", e => {
+  if (!ptrs.has(e.pointerId)) return;
+  const prev = ptrs.get(e.pointerId);
+  ptrs.set(e.pointerId, {x:e.clientX, y:e.clientY});
+  if (ptrs.size === 1){
+    view.cx -= (e.clientX - prev.x) * view.spp;
+    view.cy -= (e.clientY - prev.y) * view.spp;
+    draw();
+  } else if (ptrs.size === 2){
+    const [a, b] = [...ptrs.values()];
+    const d = Math.hypot(a.x-b.x, a.y-b.y);
+    const mid = {x:(a.x+b.x)/2, y:(a.y+b.y)/2};
+    if (lastDist > 0) zoomAbout(mid.x, mid.y, d / lastDist);
+    view.cx -= (mid.x - lastMid.x) * view.spp;
+    view.cy -= (mid.y - lastMid.y) * view.spp;
+    lastDist = d; lastMid = mid;
+    draw();
+  }
+});
+function drop(e){ ptrs.delete(e.pointerId); lastDist = 0; }
+stage.addEventListener("pointerup", drop);
+stage.addEventListener("pointercancel", drop);
+stage.addEventListener("wheel", e => {
+  e.preventDefault();
+  zoomAbout(e.clientX, e.clientY, Math.exp(-e.deltaY * 0.002));
+}, {passive:false});
+document.addEventListener("gesturestart", e => e.preventDefault());
+
+/* ---------- loading ---------- */
+function urlFor(date, scale, cx, cy, w, h){
+  return API + "?date=" + date.toISOString().replace(/\.\d{3}Z$/, "Z")
+    + "&imageScale=" + scale
+    + "&layers=[SDO,AIA,AIA," + wl + ",1,100]"
+    + "&x0=" + cx.toFixed(1) + "&y0=" + cy.toFixed(1)
+    + "&width=" + w + "&height=" + h
+    + "&display=true&watermark=false";
+}
+
+function loadImage(src){
+  return new Promise((res, rej) => {
+    const img = new Image();
+    img.onload = () => res(img);
+    img.onerror = () => rej(new Error("load failed"));
+    img.src = src;
+  });
+}
+
+async function loadSequence(newMeta, label){
+  const token = ++loadToken;
+  const n = +document.getElementById("nf").value;
+  const hours = +document.getElementById("dur").value;
+  const end = Date.now();
+  const step = hours * 3600e3 / (n - 1);
+  const dates = Array.from({length:n}, (_, i) => new Date(end - (n-1-i) * step));
+
+  setStatus(label + " 0/" + n);
+  document.getElementById("banner").style.display = "none";
+
+  const out = new Array(n);
+  let done = 0, errs = 0, cursor = 0;
+  const worker = async () => {
+    while (cursor < n){
+      const i = cursor++;
+      if (token !== loadToken) return;
+      try {
+        const img = await loadImage(urlFor(dates[i], newMeta.scale, newMeta.cx, newMeta.cy, newMeta.w, newMeta.h));
+        out[i] = {img, date: dates[i]};
+      } catch { errs++; }
+      done++;
+      if (token === loadToken) setStatus(label + " " + done + "/" + n);
+    }
+  };
+  await Promise.all([worker(), worker(), worker(), worker()]);
+  if (token !== loadToken) return;
+
+  const ok = out.filter(Boolean);
+  if (ok.length === 0){
+    setStatus("no frames loaded");
+    const banner = document.getElementById("banner");
+    banner.style.display = "block";
+    try {
+      await fetch("https://api.helioviewer.org/v2/getStatus/", {mode:"no-cors"});
+      banner.innerHTML = "<b>Server reached, but images failed to load</b>" +
+        "<p>api.helioviewer.org is reachable, so this is likely a temporary " +
+        "server-side issue or an unsupported response in this browser. " +
+        "Try Load movie again, or a different channel.</p>";
+    } catch {
+      banner.innerHTML = "<b>Network requests are blocked here</b>" +
+        "<p>This viewer (sandboxed preview or file preview) is not allowing " +
+        "requests to api.helioviewer.org. Open the file in a full browser: " +
+        "on Android, open it with Chrome from your Downloads; on iOS, the " +
+        "Files preview blocks scripts \u2014 host the file somewhere " +
+        "(e.g. GitHub Pages) and open that URL in Safari.</p>";
+    }
+    return;
+  }
+  frames = ok; meta = newMeta; idx = frames.length - 1;
+  const scrub = document.getElementById("scrub");
+  scrub.max = frames.length - 1; scrub.value = idx;
+  setStatus(ok.length + " frames" + (errs ? " (" + errs + " failed)" : ""));
+  updateStamp(); draw();
+  if (!playing) togglePlay();
+}
+
+function loadFullDisk(){
+  const px = framePx();
+  const n = +document.getElementById("nf").value;
+  loadSequence({scale: Math.max(NATIVE, DISK_SPAN / px), cx:0, cy:0, w:px, h:px},
+    "loading" + memWarn(n, px, px));
+  fitDisk();
+}
+
+function sharpenView(){
+  if (!meta){ loadFullDisk(); return; }
+  const px = framePx();
+  const n = +document.getElementById("nf").value;
+  const spanX = view.spp * W, spanY = view.spp * H;
+  let scale = Math.max(NATIVE, Math.max(spanX, spanY) / px);
+  const w = Math.min(4096, Math.round(spanX / scale));
+  const h = Math.min(4096, Math.round(spanY / scale));
+  loadSequence({scale, cx: view.cx, cy: view.cy, w, h},
+    "sharpening (" + scale.toFixed(2) + "\u2033/px)" + memWarn(n, w, h));
+}
+
+/* ---------- transport ---------- */
+function togglePlay(){
+  playing = !playing;
+  document.getElementById("playBtn").innerHTML = playing ? "&#10073;&#10073;" : "&#9654;";
+}
+function tick(t){
+  if (playing && frames.length > 1 && t - lastTick > 1000 / fps){
+    lastTick = t;
+    idx = (idx + 1) % frames.length;
+    document.getElementById("scrub").value = idx;
+    updateStamp(); draw();
+  }
+  requestAnimationFrame(tick);
+}
+function updateStamp(){
+  const f = frames[idx];
+  if (!f) return;
+  document.getElementById("stamp").textContent =
+    "AIA " + wl + " \u00b7 " + f.date.toISOString().slice(0, 16).replace("T", " ") + " UT";
+}
+
+/* ---------- UI wiring ---------- */
+const chipBox = document.getElementById("chips");
+for (const ch of CHANNELS){
+  const b = document.createElement("button");
+  b.className = "chip"; b.textContent = ch.wl;
+  b.onclick = () => {
+    wl = ch.wl;
+    document.documentElement.style.setProperty("--accent", ch.c);
+    for (const el of chipBox.children) el.classList.remove("on"), el.style.background = "";
+    b.classList.add("on"); b.style.background = ch.c;
+    loadFullDisk();
+  };
+  if (ch.wl === wl){ b.classList.add("on"); b.style.background = ch.c;
+    document.documentElement.style.setProperty("--accent", ch.c); }
+  chipBox.appendChild(b);
+}
+document.getElementById("loadBtn").onclick = loadFullDisk;
+document.getElementById("hdBtn").onclick = sharpenView;
+document.getElementById("fitBtn").onclick = fitDisk;
+document.getElementById("playBtn").onclick = togglePlay;
+document.getElementById("scrub").oninput = e => {
+  idx = +e.target.value; playing = false;
+  document.getElementById("playBtn").innerHTML = "&#9654;";
+  updateStamp(); draw();
+};
+document.getElementById("fps").oninput = e => {
+  fps = +e.target.value;
+  document.getElementById("fpsLbl").textContent = fps + " fps";
+};
+document.getElementById("toggleTop").onclick = e => {
+  const chips = document.getElementById("chips"),
+        opts = document.getElementById("opts"),
+        st = document.getElementById("status");
+  const hidden = chips.style.display === "none";
+  chips.style.display = opts.style.display = st.style.display = hidden ? "" : "none";
+  e.target.textContent = hidden ? "hide" : "controls";
+};
+function setStatus(s){ document.getElementById("status").textContent = s; }
+
+/* ---------- go: last day of He II 304 ---------- */
+resize(); fitDisk();
+requestAnimationFrame(tick);
+loadFullDisk();
+</script>
+</body>
+</html>
