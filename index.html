@@ -124,7 +124,7 @@ const CHANNELS = [
 const API = "https://api.helioviewer.org/v2/takeScreenshot/";
 const NATIVE = 0.6;           // arcsec / px, AIA native plate scale
 const DISK_SPAN = 2478;       // arcsec covered by full-disk request
-const WORKERS = 8;            // server render time dominates, so loads scale with concurrency
+const WORKERS = 12;           // server render time dominates, so loads scale with concurrency
 function framePx(){ return +document.getElementById("res").value; }
 function memWarn(n, w, h){
   const mb = n * w * h * 4 / 1e6;
