@@ -188,34 +188,14 @@ function rotate(x, y, days, b0){
   return {x: R_SUN * cl * Math.sin(lon), y: R_SUN * (sl*cb - cl*sb*Math.cos(lon))};
 }
 
-/* Where the tracked point sits at `date`. */
-function trackedCenter(date){
-  if (track){
-    const p = rotate(view.cx, view.cy, (date - track) / 86400e3, b0Of(track));
-    if (p) return p;
-  }
-  return {x: view.cx, y: view.cy};
-}
-
-/* view.cx/cy holds the tracked point as of `track`, so re-anchor both to the
-   frame on screen before a gesture, letting the user drag from what they see. */
-function repin(){
-  if (!track) return;
-  const f = frameAt(idx);
-  if (!f) return;
-  const c = trackedCenter(f.date);
-  view.cx = c.x; view.cy = c.y; track = f.date;
-}
-
+/* Tracking de-rotates every frame to one reference time rather than pinning a
+   single point, so the view never moves, the limb stays put, and the whole
+   disk is stabilized instead of one feature with everything shearing past it. */
 function toggleTrack(){
   if (track) track = null;
   else {
     const f = frameAt(idx);
     if (!f) return;
-    if (!rotate(view.cx, view.cy, 0, b0Of(f.date))){
-      setStatus("nothing to track: the view center is off the disk");
-      return;
-    }
     track = f.date;
   }
   document.getElementById("trackBtn").classList.toggle("on", !!track);
@@ -248,10 +228,6 @@ window.addEventListener("resize", resize);
 function fitDisk(){
   view.cx = 0; view.cy = 0;
   view.spp = 2200 / Math.min(W, H);   // disk ≈1920″ + margin
-  if (track){                          // showing the whole disk, nothing to hold centered
-    track = null;
-    document.getElementById("trackBtn").classList.remove("on");
-  }
   draw();
 }
 
@@ -266,17 +242,83 @@ function frameAt(i){
   return null;
 }
 
+let MESH = 16;                // warp grid per axis; see the note on accuracy below
+
+/* Untracked, or on the reference frame itself: one straight blit. */
+function plain(img){
+  const dw = meta.w * meta.scale / view.spp;
+  const dh = meta.h * meta.scale / view.spp;
+  ctx.drawImage(img, W/2 + (meta.cx - view.cx)/view.spp - dw/2,
+                     H/2 - (meta.cy - view.cy)/view.spp - dh/2, dw, dh);
+}
+
+/* One mesh triangle. Canvas 2D can only apply affine transforms, so the warp
+   is built from many small affine pieces, each fitted to a triangle's three
+   source-to-screen correspondences. Passing a null source draws that triangle
+   unwarped. */
+function tri(img, a, b, c, A, B, C){
+  ctx.save();
+  const mx = (a[0]+b[0]+c[0])/3, my = (a[1]+b[1]+c[1])/3, g = 1.01;
+  ctx.beginPath();                       // grown a hair so neighbours leave no seam
+  ctx.moveTo(mx + (a[0]-mx)*g, my + (a[1]-my)*g);
+  ctx.lineTo(mx + (b[0]-mx)*g, my + (b[1]-my)*g);
+  ctx.lineTo(mx + (c[0]-mx)*g, my + (c[1]-my)*g);
+  ctx.closePath();
+  ctx.clip();
+  const d = A ? (A[0]-C[0])*(B[1]-C[1]) - (B[0]-C[0])*(A[1]-C[1]) : 0;
+  if (A && Math.abs(d) > 1e-9){
+    const m11 = ((a[0]-c[0])*(B[1]-C[1]) - (b[0]-c[0])*(A[1]-C[1])) / d;
+    const m21 = ((b[0]-c[0])*(A[0]-C[0]) - (a[0]-c[0])*(B[0]-C[0])) / d;
+    const m12 = ((a[1]-c[1])*(B[1]-C[1]) - (b[1]-c[1])*(A[1]-C[1])) / d;
+    const m22 = ((b[1]-c[1])*(A[0]-C[0]) - (a[1]-c[1])*(B[0]-C[0])) / d;
+    ctx.transform(m11, m12, m21, m22,
+                  c[0] - m11*C[0] - m21*C[1], c[1] - m12*C[0] - m22*C[1]);
+    ctx.drawImage(img, 0, 0);
+  } else {
+    plain(img);
+  }
+  ctx.restore();
+}
+
+/* De-rotate a frame to the reference time. For every mesh node: screen ->
+   helioprojective -> heliographic -> advance the longitude at the local rate
+   -> project back -> source pixel. Cells touching the limb are drawn unwarped,
+   because the map is singular there and a finer mesh does not converge. */
+function warp(img, days, b0){
+  const n = MESH, sx = [], sy = [], ux = [], uy = [], ok = [];
+  for (let i = 0; i <= n; i++) sx.push(W * i / n);
+  for (let j = 0; j <= n; j++) sy.push(H * j / n);
+  for (let j = 0; j <= n; j++){
+    for (let i = 0; i <= n; i++){
+      const x = view.cx + (sx[i] - W/2) * view.spp;
+      const y = view.cy - (sy[j] - H/2) * view.spp;
+      const p = rotate(x, y, days, b0);
+      ok.push(p ? 1 : 0);
+      ux.push(((p ? p.x : x) - meta.cx)/meta.scale + meta.w/2);
+      uy.push((meta.cy - (p ? p.y : y))/meta.scale + meta.h/2);
+    }
+  }
+  for (let j = 0; j < n; j++){
+    for (let i = 0; i < n; i++){
+      const k = j*(n+1)+i, r = k+n+1;
+      const S = [[sx[i],sy[j]], [sx[i+1],sy[j]], [sx[i],sy[j+1]], [sx[i+1],sy[j+1]]];
+      const T = (ok[k] && ok[k+1] && ok[r] && ok[r+1])
+        ? [[ux[k],uy[k]], [ux[k+1],uy[k+1]], [ux[r],uy[r]], [ux[r+1],uy[r+1]]]
+        : [null, null, null, null];
+      tri(img, S[0], S[1], S[2], T[0], T[1], T[2]);
+      tri(img, S[1], S[3], S[2], T[1], T[3], T[2]);
+    }
+  }
+}
+
 function draw(){
   ctx.clearRect(0, 0, W, H);
   const f = frameAt(idx);
   if (!f || !meta) return;
-  const c = trackedCenter(f.date);
-  const dw = meta.w * meta.scale / view.spp;
-  const dh = meta.h * meta.scale / view.spp;
-  const dx = W/2 + (meta.cx - c.x)/view.spp - dw/2;
-  const dy = H/2 + (meta.cy - c.y)/view.spp - dh/2;
   ctx.imageSmoothingEnabled = (meta.scale / view.spp) < 1.5; // crisp when deeply zoomed
-  ctx.drawImage(f.img, dx, dy, dw, dh);
+  const days = track ? (f.date - track) / 86400e3 : 0;
+  if (days) warp(f.img, days, b0Of(track));
+  else plain(f.img);
 }
 
 /* ---------- gestures: pan / pinch / double-tap / wheel ---------- */
@@ -285,16 +327,15 @@ let lastMid = null, lastDist = 0, lastTapT = 0, lastTapX = 0, lastTapY = 0;
 
 function zoomAbout(px, py, factor){
   const ax = view.cx + (px - W/2) * view.spp;
-  const ay = view.cy + (py - H/2) * view.spp;
+  const ay = view.cy - (py - H/2) * view.spp;
   view.spp = Math.min(Math.max(view.spp / factor, 0.05), 20);
   view.cx = ax - (px - W/2) * view.spp;
-  view.cy = ay - (py - H/2) * view.spp;
+  view.cy = ay + (py - H/2) * view.spp;
   draw();
 }
 
 const stage = document.getElementById("stage");
 stage.addEventListener("pointerdown", e => {
-  repin();
   stage.setPointerCapture(e.pointerId);
   ptrs.set(e.pointerId, {x:e.clientX, y:e.clientY});
   if (ptrs.size === 1){
@@ -316,7 +357,7 @@ stage.addEventListener("pointermove", e => {
   ptrs.set(e.pointerId, {x:e.clientX, y:e.clientY});
   if (ptrs.size === 1){
     view.cx -= (e.clientX - prev.x) * view.spp;
-    view.cy -= (e.clientY - prev.y) * view.spp;
+    view.cy += (e.clientY - prev.y) * view.spp;   // screen y is down, solar y is up
     draw();
   } else if (ptrs.size === 2){
     const [a, b] = [...ptrs.values()];
@@ -324,7 +365,7 @@ stage.addEventListener("pointermove", e => {
     const mid = {x:(a.x+b.x)/2, y:(a.y+b.y)/2};
     if (lastDist > 0) zoomAbout(mid.x, mid.y, d / lastDist);
     view.cx -= (mid.x - lastMid.x) * view.spp;
-    view.cy -= (mid.y - lastMid.y) * view.spp;
+    view.cy += (mid.y - lastMid.y) * view.spp;
     lastDist = d; lastMid = mid;
     draw();
   }
@@ -334,7 +375,6 @@ stage.addEventListener("pointerup", drop);
 stage.addEventListener("pointercancel", drop);
 stage.addEventListener("wheel", e => {
   e.preventDefault();
-  repin();
   zoomAbout(e.clientX, e.clientY, Math.exp(-e.deltaY * 0.002));
 }, {passive:false});
 document.addEventListener("gesturestart", e => e.preventDefault());
@@ -423,6 +463,7 @@ async function loadSequence(newMeta, label){
     return;
   }
   setStatus(ok.length + " frames" + (errs ? " (" + errs + " failed)" : ""));
+  if (BENCH) runBench();
 }
 
 function loadFullDisk(){
@@ -475,6 +516,76 @@ function updateStamp(){
   if (!f) return;
   document.getElementById("stamp").textContent =
     "AIA " + wl + " \u00b7 " + f.date.toISOString().slice(0, 16).replace("T", " ") + " UT";
+}
+
+/* ---------- benchmark ---------- */
+/* Load with ?bench to time the render path once frames are in, on this device
+   rather than in the abstract. Reports the plain blit and the de-rotating warp
+   separately, since only the second one scales with mesh size. */
+const BENCH = location.search.indexOf("bench") >= 0;
+
+/* Canvas 2D draws are deferred, so timing a drawImage call measures command
+   submission rather than raster work, and the usual flush (getImageData) is
+   unavailable because cross-origin frames taint the canvas. So drive real
+   animation frames and count them: the wall-clock number includes compositing
+   and is what playback actually gets, capped by the display refresh. */
+function rafBench(n, reps){
+  reps = reps || 1;
+  return new Promise(resolve => {
+    let i = 0, t0 = 0;
+    function step(ts){
+      if (i === 0) t0 = ts;
+      if (i >= n){
+        const wall = ts - t0;
+        resolve({fps:+(1000*n/wall).toFixed(1), frame_ms:+(wall/n).toFixed(2),
+                 draws_per_frame: reps,
+                 per_draw_ms:+(wall/(n*reps)).toFixed(3)});
+        return;
+      }
+      for (let r = 0; r < reps; r++){ idx = (i*reps + r) % frames.length; draw(); }
+      i++;
+      requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+  });
+}
+
+/* Every configuration sits at vsync when drawing once per frame, so push more
+   draws into each frame until the refresh cap breaks. The rep count at which
+   fps falls away is the headroom over real playback. */
+async function saturate(meshOrZero){
+  if (meshOrZero){ MESH = meshOrZero; const f0 = frameAt(0); track = f0 ? f0.date : null; }
+  else track = null;
+  const out = [];
+  for (const reps of [1, 2, 4, 8, 16, 32]){
+    await rafBench(10, reps);
+    const r = await rafBench(60, reps);
+    out.push(r);
+    if (r.fps < 30) break;
+  }
+  return out;
+}
+
+async function runBench(){
+  const wasTrack = track, wasIdx = idx, wasMesh = MESH, wasPlaying = playing;
+  const wasView = Object.assign({}, view);
+  playing = false;
+  const res = {canvas:[cv.width, cv.height], dpr:DPR,
+               tile: meta ? [meta.w, meta.h] : null,
+               frames: frames.filter(Boolean).length, full_disk:{}, zoomed:{}};
+  for (const m of [0, 8, 16, 32]) res.full_disk[m ? "mesh"+m : "blit"] = await saturate(m);
+  view.cx = 400; view.cy = 250; view.spp = 300 / Math.min(W, H);
+  res.zoom_spp = +view.spp.toFixed(4);
+  for (const m of [0, 16]) res.zoomed[m ? "mesh"+m : "blit"] = await saturate(m);
+  Object.assign(view, wasView);
+  track = wasTrack; idx = wasIdx; MESH = wasMesh; playing = wasPlaying;
+  draw();
+  const w16 = res.full_disk.mesh16;
+  setStatus("warp16 holds vsync to " + w16[w16.length-1].draws_per_frame + " draws/frame");
+  try {
+    await fetch("/bench", {method:"POST", headers:{"Content-Type":"application/json"},
+                           body: JSON.stringify(res)});
+  } catch {}
 }
 
 /* ---------- UI wiring ---------- */

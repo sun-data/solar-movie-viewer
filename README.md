@@ -21,7 +21,32 @@ and pinch-zoom. Currently the channel list covers the nine
   region you have zoomed into, down to the 0.6 arcsec/pixel AIA native scale.
   Use this after zooming to recover detail rather than magnifying the
   full-disk frames.
+* **Track rotation** de-rotates every frame to the timestamp of the frame that
+  was showing when you pressed it, so the solar surface holds still and only
+  genuine evolution moves. The view itself does not move, so the limb stays
+  where it is.
 * Drag to pan, pinch or scroll to zoom, double-tap to zoom in.
+
+## Differential rotation
+
+Tracking remaps each frame rather than sliding it. For every point: screen to
+helioprojective, to heliographic, advance the longitude by the local rotation
+rate, project back, and sample there. The rate is Snodgrass (1984) for small
+magnetic features, converted from sidereal to synodic because the observer
+rides along with Earth, and the tilt of the solar axis (B0, up to 7.25
+degrees) is carried through, so features move vertically as well as
+horizontally.
+
+Two deliberate approximations. The remap is built from a mesh of small affine
+patches, because Canvas 2D applies only affine transforms and WebGL cannot
+touch these frames at all: neither Helioviewer nor the SDO archive sends CORS
+headers, so the images taint the canvas and cannot be used as textures or read
+back. And cells touching the limb are drawn unwarped, because the map is
+singular there and refining the mesh does not converge.
+
+Good to well under a pixel on a zoomed-in region, which is what tracking is
+for. Not a substitute for a real reprojection if you need to measure
+something.
 
 ## Implementation
 
