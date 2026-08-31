@@ -141,30 +141,57 @@ function memWarn(n, w, h){
 const ROT = {A:14.713, B:-2.396, C:-1.787};
 const EARTH = 0.9856;         // deg / day, Earth's orbit: converts sidereal to synodic
 const R_SUN = 959.63;         // arcsec, mean apparent solar radius at 1 AU
+const I_SUN = 7.25 * Math.PI / 180;   // tilt of the solar rotation axis to the ecliptic
 
-/* Advance a helioprojective point by `days` of differential rotation. Assumes
-   an orthographic projection and ignores the B0 tilt of the solar axis, which
-   reaches 7.25 degrees and so misreads the latitude, and through it the rate,
-   by a fraction of a degree per day. Good to roughly ten arcsec over a day:
-   enough to hold a feature in frame, not enough to measure with. Returns null
-   when the point is off the disk or has rotated onto the far side. */
-function rotate(x, y, days){
-  if (Math.hypot(x, y) > R_SUN) return null;
-  const lat = Math.asin(Math.max(-1, Math.min(1, y / R_SUN)));
-  const sin_lon = (x / R_SUN) / Math.cos(lat);
-  if (!(Math.abs(sin_lon) <= 1)) return null;
+function rate(lat){           // synodic, degrees per day
   const s = Math.sin(lat);
-  const rate = ROT.A + ROT.B*s*s + ROT.C*s*s*s*s - EARTH;
-  const lon = Math.asin(sin_lon) + rate * days * Math.PI / 180;
-  if (Math.abs(lon) > Math.PI/2) return null;
-  return {x: R_SUN * Math.cos(lat) * Math.sin(lon), y: R_SUN * s};
+  return ROT.A + ROT.B*s*s + ROT.C*s*s*s*s - EARTH;
 }
 
-/* Where the tracked point sits at `date`. Untracked, or once the feature has
-   gone over the limb, this is just the view center. */
+/* Heliographic latitude of the disk center, Meeus chapter 29. The rotation
+   axis leans up to 7.25 degrees toward or away from us over the year, so a
+   feature moves in y as well as x as it rotates. Assuming B0 = 0 pins the
+   apparent y and the tracker drifts off vertically, by about 20 arcsec a day
+   near the limb. */
+function b0Of(date){
+  const jd = date.getTime() / 86400e3 + 2440587.5;
+  const T = (jd - 2451545) / 36525;
+  const L0 = 280.46646 + 36000.76983 * T;
+  const M = (357.52911 + 35999.05029 * T) * Math.PI / 180;
+  const C = (1.914602 - 0.004817*T) * Math.sin(M)
+          + 0.019993 * Math.sin(2*M) + 0.000289 * Math.sin(3*M);
+  const node = (125.04 - 1934.136 * T) * Math.PI / 180;
+  const lam = (L0 + C - 0.00569 - 0.00478 * Math.sin(node)) * Math.PI / 180;
+  const K = (73.6667 + 1.3958333 * (jd - 2396758) / 36525) * Math.PI / 180;
+  return Math.asin(Math.sin(lam - K) * Math.sin(I_SUN));
+}
+
+/* Advance a helioprojective point by `days` of differential rotation, through
+   heliographic coordinates so the tilt is carried properly. Orthographic, and
+   B0 is held at its value on the pinned frame, which drifts about 0.1 degrees
+   a day and so costs a few arcsec across a long window. Longitude is clamped
+   at the terminator, so a feature reaching the limb parks there rather than
+   jumping. Returns null only when the point is off the disk. */
+function rotate(x, y, days, b0){
+  if (Math.hypot(x, y) > R_SUN) return null;
+  const xr = x / R_SUN, yr = y / R_SUN;
+  const zr = Math.sqrt(Math.max(0, 1 - xr*xr - yr*yr));
+  const cb = Math.cos(b0), sb = Math.sin(b0);
+  const lat = Math.asin(Math.max(-1, Math.min(1, yr*cb + zr*sb)));
+  const cl = Math.cos(lat), sl = Math.sin(lat);
+  let lon = Math.atan2(xr, zr*cb - yr*sb) + rate(lat) * days * Math.PI / 180;
+  const edge = -Math.tan(lat) * Math.tan(b0);   // cos(lon) where the point sets
+  if (Math.abs(edge) < 1){
+    const max = Math.acos(edge);
+    lon = Math.max(-max, Math.min(max, lon));
+  }
+  return {x: R_SUN * cl * Math.sin(lon), y: R_SUN * (sl*cb - cl*sb*Math.cos(lon))};
+}
+
+/* Where the tracked point sits at `date`. */
 function trackedCenter(date){
   if (track){
-    const p = rotate(view.cx, view.cy, (date - track) / 86400e3);
+    const p = rotate(view.cx, view.cy, (date - track) / 86400e3, b0Of(track));
     if (p) return p;
   }
   return {x: view.cx, y: view.cy};
@@ -185,7 +212,7 @@ function toggleTrack(){
   else {
     const f = frameAt(idx);
     if (!f) return;
-    if (!rotate(view.cx, view.cy, 0)){
+    if (!rotate(view.cx, view.cy, 0, b0Of(f.date))){
       setStatus("nothing to track: the view center is off the disk");
       return;
     }
@@ -417,7 +444,7 @@ function sharpenView(){
     const hours = +document.getElementById("dur").value;
     let pad = 0;
     for (const days of [-hours/24, hours/24]){
-      const p = rotate(view.cx, view.cy, days);
+      const p = rotate(view.cx, view.cy, days, b0Of(track));
       if (p) pad = Math.max(pad, Math.hypot(p.x - view.cx, p.y - view.cy));
     }
     spanX += 2*pad; spanY += 2*pad;
