@@ -6,8 +6,9 @@ A browser-based movie viewer for solar images, built for phones first.
 
 Pick a channel, pick a time window, and the viewer assembles a movie from
 [Helioviewer](https://helioviewer.org) imagery that you can scrub, loop, pan,
-and pinch-zoom. Currently the channel list covers the nine
-[SDO](https://sdo.gsfc.nasa.gov)/AIA passbands.
+and pinch-zoom. The channel list covers the nine
+[SDO](https://sdo.gsfc.nasa.gov)/AIA passbands plus the HMI line-of-sight
+magnetogram.
 
 ## Usage
 

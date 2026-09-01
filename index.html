@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>AIA Movie Viewer</title>
+<title>Solar Movie Viewer</title>
 <style>
   :root{
     --bg:#000000;
@@ -118,13 +118,22 @@
 "use strict";
 
 /* ---------- channels (standard AIA colormap hues for the chips) ---------- */
+/* Layers are requested by Helioviewer source id rather than by spelling out
+   observatory/instrument/detector, since AIA and HMI do not name those the
+   same way. Ids come from the v2 getDataSources tree. */
 const CHANNELS = [
-  {wl:171, c:"#f2b53e"}, {wl:193, c:"#d98a2b"}, {wl:211, c:"#c77ee0"},
-  {wl:304, c:"#e4573d"}, {wl:335, c:"#4f7bdc"}, {wl:131, c:"#6fd8d3"},
-  {wl:94,  c:"#7fae4a"}, {wl:1600,c:"#c9c94a"}, {wl:1700,c:"#d7a8a0"},
+  {id:10, label:"171",   name:"AIA 171",         native:0.6, c:"#f2b53e"},
+  {id:11, label:"193",   name:"AIA 193",         native:0.6, c:"#d98a2b"},
+  {id:12, label:"211",   name:"AIA 211",         native:0.6, c:"#c77ee0"},
+  {id:13, label:"304",   name:"AIA 304",         native:0.6, c:"#e4573d"},
+  {id:14, label:"335",   name:"AIA 335",         native:0.6, c:"#4f7bdc"},
+  {id:9,  label:"131",   name:"AIA 131",         native:0.6, c:"#6fd8d3"},
+  {id:8,  label:"94",    name:"AIA 94",          native:0.6, c:"#7fae4a"},
+  {id:15, label:"1600",  name:"AIA 1600",        native:0.6, c:"#c9c94a"},
+  {id:16, label:"1700",  name:"AIA 1700",        native:0.6, c:"#d7a8a0"},
+  {id:19, label:"HMI B", name:"HMI magnetogram", native:0.5, c:"#b9b4ab"},
 ];
 const API = "https://api.helioviewer.org/v2/takeScreenshot/";
-const NATIVE = 0.6;           // arcsec / px, AIA native plate scale
 const DISK_SPAN = 2478;       // arcsec covered by full-disk request
 const WORKERS = 12;           // server render time dominates, so loads scale with concurrency
 function framePx(){ return +document.getElementById("res").value; }
@@ -203,7 +212,7 @@ function toggleTrack(){
 }
 
 /* ---------- state ---------- */
-let wl = 304;
+let chan = CHANNELS[3];       // AIA 304
 let frames = [];              // {img, date}
 let meta = null;              // {scale, cx, cy, w, h} of current frame set
 let idx = 0, playing = false, fps = 12, lastTick = 0;
@@ -383,7 +392,7 @@ document.addEventListener("gesturestart", e => e.preventDefault());
 function urlFor(date, scale, cx, cy, w, h){
   return API + "?date=" + date.toISOString().replace(/\.\d{3}Z$/, "Z")
     + "&imageScale=" + scale
-    + "&layers=[SDO,AIA,AIA," + wl + ",1,100]"
+    + "&layers=[" + chan.id + ",1,100]"
     + "&x0=" + cx.toFixed(1) + "&y0=" + cy.toFixed(1)
     + "&width=" + w + "&height=" + h
     + "&display=true&watermark=false";
@@ -469,7 +478,7 @@ async function loadSequence(newMeta, label){
 function loadFullDisk(){
   const px = framePx();
   const n = +document.getElementById("nf").value;
-  loadSequence({scale: Math.max(NATIVE, DISK_SPAN / px), cx:0, cy:0, w:px, h:px},
+  loadSequence({scale: Math.max(chan.native, DISK_SPAN / px), cx:0, cy:0, w:px, h:px},
     "loading" + memWarn(n, px, px));
   fitDisk();
 }
@@ -490,7 +499,7 @@ function sharpenView(){
     }
     spanX += 2*pad; spanY += 2*pad;
   }
-  let scale = Math.max(NATIVE, Math.max(spanX, spanY) / px);
+  let scale = Math.max(chan.native, Math.max(spanX, spanY) / px);
   const w = Math.min(4096, Math.round(spanX / scale));
   const h = Math.min(4096, Math.round(spanY / scale));
   loadSequence({scale, cx: view.cx, cy: view.cy, w, h},
@@ -515,7 +524,7 @@ function updateStamp(){
   const f = frameAt(idx);
   if (!f) return;
   document.getElementById("stamp").textContent =
-    "AIA " + wl + " \u00b7 " + f.date.toISOString().slice(0, 16).replace("T", " ") + " UT";
+    chan.name + " \u00b7 " + f.date.toISOString().slice(0, 16).replace("T", " ") + " UT";
 }
 
 /* ---------- benchmark ---------- */
@@ -592,15 +601,15 @@ async function runBench(){
 const chipBox = document.getElementById("chips");
 for (const ch of CHANNELS){
   const b = document.createElement("button");
-  b.className = "chip"; b.textContent = ch.wl;
+  b.className = "chip"; b.textContent = ch.label;
   b.onclick = () => {
-    wl = ch.wl;
+    chan = ch;
     document.documentElement.style.setProperty("--accent", ch.c);
     for (const el of chipBox.children) el.classList.remove("on"), el.style.background = "";
     b.classList.add("on"); b.style.background = ch.c;
     loadFullDisk();
   };
-  if (ch.wl === wl){ b.classList.add("on"); b.style.background = ch.c;
+  if (ch === chan){ b.classList.add("on"); b.style.background = ch.c;
     document.documentElement.style.setProperty("--accent", ch.c); }
   chipBox.appendChild(b);
 }
