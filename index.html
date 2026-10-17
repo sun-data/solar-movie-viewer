@@ -26,7 +26,8 @@
   #top{position:absolute;top:0;left:0;right:0;background:var(--panel);
     backdrop-filter:blur(10px);border-bottom:1px solid var(--line);
     padding:calc(env(safe-area-inset-top) + 8px) 10px 8px}
-  #chips{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}
+  #chips{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;padding-bottom:2px;
+    margin-right:44px}       /* clear of the hide button */
   #chips::-webkit-scrollbar{display:none}
   .chip{flex:0 0 auto;border:1px solid var(--line);border-radius:14px;
     padding:5px 12px;color:var(--dim);background:transparent;font-size:13px}
@@ -151,9 +152,13 @@ const CHANNELS = [
    bg:"linear-gradient(90deg,#5a6cff,#4cc04a,#ff5a3c)"},
 ];
 const API = "https://api.helioviewer.org/v2/takeScreenshot/";
+/* A link can choose what the viewer opens on: ?ch=DEM&dur=48&nf=96 picks the
+   channel by its chip label (any case) and the duration and frame count by
+   their menu values. Values not on the chips or menus are ignored. */
+const PARAMS = new URLSearchParams(location.search);
 /* Where the DEM frames and their manifest live; ?dem=URL points elsewhere,
    such as a local copy. */
-const DEM_BASE = (new URLSearchParams(location.search).get("dem")
+const DEM_BASE = (PARAMS.get("dem")
   || "https://sun-data.github.io/aia-dem/").replace(/\/?$/, "/");
 const DISK_SPAN = 2478;       // arcsec covered by full-disk request
 const WORKERS = 12;           // server render time dominates, so loads scale with concurrency
@@ -233,7 +238,8 @@ function toggleTrack(){
 }
 
 /* ---------- state ---------- */
-let chan = CHANNELS[3];       // AIA 304
+let chan = CHANNELS.find(c => c.label.toLowerCase() === (PARAMS.get("ch") || "").toLowerCase())
+  || CHANNELS[3];             // AIA 304
 let frames = [];              // {img, date}
 let meta = null;              // {scale, cx, cy, w, h} of current frame set
 let idx = 0, playing = false, fps = 12, lastTick = 0;
@@ -693,9 +699,14 @@ for (const ch of CHANNELS){
     b.classList.add("on"); b.style.background = ch.bg || ch.c;
     loadFullDisk();
   };
-  if (ch === chan){ b.classList.add("on"); b.style.background = ch.bg || ch.c;
-    document.documentElement.style.setProperty("--accent", ch.c); }
   chipBox.appendChild(b);
+  if (ch === chan){ b.classList.add("on"); b.style.background = ch.bg || ch.c;
+    document.documentElement.style.setProperty("--accent", ch.c);
+    b.scrollIntoView({block:"nearest", inline:"nearest"}); }   // the chip row scrolls on a phone
+}
+for (const id of ["dur", "nf"]){
+  const menu = document.getElementById(id), v = PARAMS.get(id);
+  if ([...menu.options].some(o => o.value === v)) menu.value = v;
 }
 document.getElementById("loadBtn").onclick = loadFullDisk;
 document.getElementById("hdBtn").onclick = sharpenView;
@@ -722,7 +733,7 @@ document.getElementById("toggleTop").onclick = e => {
 };
 function setStatus(s){ document.getElementById("status").textContent = s; }
 
-/* ---------- go: last day of He II 304 ---------- */
+/* ---------- go: what the link asks for, else 6 h of He II 304 ---------- */
 resize(); fitDisk();
 requestAnimationFrame(tick);
 loadFullDisk();
