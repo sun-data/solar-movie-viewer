@@ -59,12 +59,26 @@
   #banner b{display:block;margin-bottom:6px}
   #banner p{color:var(--dim);font-size:13px}
 
+  /* DEM color key: tall in the room beside the disk on a landscape screen,
+     wide in the room under it on a portrait one. Gestures pass through, and
+     it hides with the controls. */
+  #cbar{display:none}
+  #cbar.on{display:block}
+  body.bare #cbar{display:none}
+  #cbar img{position:absolute;right:4px;top:50%;transform:translateY(-50%);
+    height:min(400px,50vh);background:var(--panel);border-radius:10px;pointer-events:none}
+  @media (orientation: portrait){
+    #cbar img{right:auto;left:50%;top:auto;bottom:calc(var(--bottom-h, 96px) + 6px);
+      transform:translateX(-50%);height:auto;width:min(400px,92vw)}
+  }
+
   #toggleTop{position:absolute;right:10px;background:transparent;border:none;
     color:var(--dim);font-size:12px;padding:6px}
 </style>
 </head>
 <body>
 <div id="stage"><canvas id="cv"></canvas></div>
+<picture id="cbar"><source id="cbarWide" media="(orientation: portrait)"><img id="cbarTall" alt="DEM color key"></picture>
 
 <div id="top">
   <button id="toggleTop">hide</button>
@@ -120,7 +134,8 @@
 /* ---------- channels (standard AIA colormap hues for the chips) ---------- */
 /* Layers are requested by Helioviewer source id rather than by spelling out
    observatory/instrument/detector, since AIA and HMI do not name those the
-   same way. Ids come from the v2 getDataSources tree. */
+   same way. Ids come from the v2 getDataSources tree. The DEM channel is not
+   from Helioviewer; see loadDem. */
 const CHANNELS = [
   {id:10, label:"171",   name:"AIA 171",         native:0.6, c:"#f2b53e"},
   {id:11, label:"193",   name:"AIA 193",         native:0.6, c:"#d98a2b"},
@@ -132,8 +147,14 @@ const CHANNELS = [
   {id:15, label:"1600",  name:"AIA 1600",        native:0.6, c:"#c9c94a"},
   {id:16, label:"1700",  name:"AIA 1700",        native:0.6, c:"#d7a8a0"},
   {id:19, label:"HMI B", name:"HMI magnetogram", native:0.5, c:"#b9b4ab"},
+  {dem:true, label:"DEM", name:"AIA DEM",        native:2.4, c:"#6cc04a",
+   bg:"linear-gradient(90deg,#5a6cff,#4cc04a,#ff5a3c)"},
 ];
 const API = "https://api.helioviewer.org/v2/takeScreenshot/";
+/* Where the DEM frames and their manifest live; ?dem=URL points elsewhere,
+   such as a local copy. */
+const DEM_BASE = (new URLSearchParams(location.search).get("dem")
+  || "https://sun-data.github.io/aia-dem/").replace(/\/?$/, "/");
 const DISK_SPAN = 2478;       // arcsec covered by full-disk request
 const WORKERS = 12;           // server render time dominates, so loads scale with concurrency
 function framePx(){ return +document.getElementById("res").value; }
@@ -230,6 +251,8 @@ function resize(){
   cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   ctx.imageSmoothingEnabled = true;
+  document.documentElement.style.setProperty("--bottom-h",
+    document.getElementById("bottom").offsetHeight + "px");
   draw();
 }
 window.addEventListener("resize", resize);
@@ -407,13 +430,18 @@ function loadImage(src){
   });
 }
 
-async function loadSequence(newMeta, label){
-  const token = ++loadToken;
+/* Evenly spaced times over the chosen window, ending now. */
+function recent(){
   const n = +document.getElementById("nf").value;
   const hours = +document.getElementById("dur").value;
   const end = Date.now();
   const step = hours * 3600e3 / (n - 1);
-  const dates = Array.from({length:n}, (_, i) => new Date(end - (n-1-i) * step));
+  return Array.from({length:n}, (_, i) => new Date(end - (n-1-i) * step));
+}
+
+async function loadSequence(newMeta, label, dates, urls){
+  const token = ++loadToken;
+  const n = dates.length;
 
   setStatus(label + " 0/" + n);
   document.getElementById("banner").style.display = "none";
@@ -430,12 +458,13 @@ async function loadSequence(newMeta, label){
       const i = cursor++;
       if (token !== loadToken) return;
       try {
-        const img = await loadImage(urlFor(dates[i], newMeta.scale, newMeta.cx, newMeta.cy, newMeta.w, newMeta.h));
+        const img = await loadImage(urls[i]);
         if (token !== loadToken) return;
         out[i] = {img, date: dates[i]};
         if (!live){
           live = true;
           frames = out; meta = newMeta; idx = i;
+          document.getElementById("cbar").classList.toggle("on", !!chan.dem);
           const scrub = document.getElementById("scrub");
           scrub.max = n - 1; scrub.value = i;
           updateStamp();
@@ -455,6 +484,7 @@ async function loadSequence(newMeta, label){
     setStatus("no frames loaded");
     const banner = document.getElementById("banner");
     banner.style.display = "block";
+    if (chan.dem){ demBanner(); return; }
     try {
       await fetch("https://api.helioviewer.org/v2/getStatus/", {mode:"no-cors"});
       banner.innerHTML = "<b>Server reached, but images failed to load</b>" +
@@ -475,18 +505,73 @@ async function loadSequence(newMeta, label){
   if (BENCH) runBench();
 }
 
+function loadFrames(m, label){
+  const dates = recent();
+  loadSequence(m, label + memWarn(dates.length, m.w, m.h), dates,
+    dates.map(d => urlFor(d, m.scale, m.cx, m.cy, m.w, m.h)));
+}
+
 function loadFullDisk(){
   const px = framePx();
-  const n = +document.getElementById("nf").value;
-  loadSequence({scale: Math.max(chan.native, DISK_SPAN / px), cx:0, cy:0, w:px, h:px},
-    "loading" + memWarn(n, px, px));
+  if (chan.dem) loadDem(px);
+  else loadFrames({scale: Math.max(chan.native, DISK_SPAN / px), cx:0, cy:0, w:px, h:px}, "loading");
   fitDisk();
+}
+
+/* The DEM channel is baked rather than requested. A scheduled job inverts
+   the JSOC AIA synoptic images (2.4 arcsec/px, every 12 minutes) with
+   utu.dem.plowman, colors them with colorsynth (hue for temperature,
+   brightness for DEM, on one fixed scale for every frame), and publishes the
+   last 48 hours as full-disk JPEGs at a few sizes plus a manifest. So the
+   window ends on the newest frame rather than now, the size is the smallest
+   one at least `px` across, and the frame count is a cap met by taking every
+   k-th frame, which keeps the spacing even. The manifest changes every hour,
+   so it is refetched on every load; the frames never change once written. */
+async function loadDem(px){
+  const token = ++loadToken;
+  setStatus("loading DEM manifest");
+  document.getElementById("banner").style.display = "none";
+  let m;
+  try {
+    const r = await fetch(new URL("manifest.json", DEM_BASE), {cache:"no-store"});
+    if (!r.ok) throw new Error(r.status);
+    m = await r.json();
+    if (!m.frames.length) throw new Error("no frames");
+  } catch {
+    if (token === loadToken){ setStatus("no frames loaded"); demBanner(); }
+    return;
+  }
+  if (token !== loadToken) return;
+  const sizes = Object.keys(m.size).sort((a, b) => m.size[a] - m.size[b]);
+  const level = sizes.find(s => m.size[s] >= px) || sizes[sizes.length-1];
+  const n = +document.getElementById("nf").value;
+  const hours = +document.getElementById("dur").value;
+  const end = Date.parse(m.frames[m.frames.length-1].time);
+  const span = m.frames.filter(f => Date.parse(f.time) >= end - hours * 3600e3);
+  const k = Math.ceil(span.length / n);
+  const picked = span.filter((_, i) => (span.length - 1 - i) % k === 0);
+  const preset = m.presets[0];
+  document.getElementById("cbarTall").src = new URL(preset.colorbar, DEM_BASE).href;
+  document.getElementById("cbarWide").srcset = new URL(preset.colorbar_wide, DEM_BASE).href;
+  const w = m.size[level];
+  loadSequence({scale: m.scale[level], cx: m.center[0], cy: m.center[1], w, h: w},
+    "loading DEM" + memWarn(picked.length, w, w),
+    picked.map(f => new Date(f.time)),
+    picked.map(f => new URL(preset.path.replace("{level}", level).replace("{name}", f.name), DEM_BASE).href));
+}
+
+function demBanner(){
+  const banner = document.getElementById("banner");
+  banner.style.display = "block";
+  banner.innerHTML = "<b>Couldn't load the DEM frames</b><p></p>";
+  banner.querySelector("p").textContent = "Nothing came back from " + DEM_BASE
+    + ". The site may be briefly down; retrying later helps.";
 }
 
 function sharpenView(){
   if (!meta){ loadFullDisk(); return; }
+  if (chan.dem){ loadDem(Infinity); return; }   // full disk only: take the largest size
   const px = framePx();
-  const n = +document.getElementById("nf").value;
   let spanX = view.spp * W, spanY = view.spp * H;
   if (track){
     /* Every frame is requested on the same center, so widen the tile to cover
@@ -502,8 +587,7 @@ function sharpenView(){
   let scale = Math.max(chan.native, Math.max(spanX, spanY) / px);
   const w = Math.min(4096, Math.round(spanX / scale));
   const h = Math.min(4096, Math.round(spanY / scale));
-  loadSequence({scale, cx: view.cx, cy: view.cy, w, h},
-    "sharpening (" + scale.toFixed(2) + "\u2033/px)" + memWarn(n, w, h));
+  loadFrames({scale, cx: view.cx, cy: view.cy, w, h}, "sharpening (" + scale.toFixed(2) + "\u2033/px)");
 }
 
 /* ---------- transport ---------- */
@@ -606,10 +690,10 @@ for (const ch of CHANNELS){
     chan = ch;
     document.documentElement.style.setProperty("--accent", ch.c);
     for (const el of chipBox.children) el.classList.remove("on"), el.style.background = "";
-    b.classList.add("on"); b.style.background = ch.c;
+    b.classList.add("on"); b.style.background = ch.bg || ch.c;
     loadFullDisk();
   };
-  if (ch === chan){ b.classList.add("on"); b.style.background = ch.c;
+  if (ch === chan){ b.classList.add("on"); b.style.background = ch.bg || ch.c;
     document.documentElement.style.setProperty("--accent", ch.c); }
   chipBox.appendChild(b);
 }
@@ -633,6 +717,7 @@ document.getElementById("toggleTop").onclick = e => {
         st = document.getElementById("status");
   const hidden = chips.style.display === "none";
   chips.style.display = opts.style.display = st.style.display = hidden ? "" : "none";
+  document.body.classList.toggle("bare", !hidden);
   e.target.textContent = hidden ? "hide" : "controls";
 };
 function setStatus(s){ document.getElementById("status").textContent = s; }
