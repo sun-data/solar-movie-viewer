@@ -27,14 +27,33 @@ last 48 hours.
   was showing when you pressed it, so the solar surface holds still and only
   genuine evolution moves. The view itself does not move, so the limb stays
   where it is.
+* **Label regions** marks every NOAA-numbered active region on the disk with
+  its number; see below.
 * Drag to pan, pinch or scroll to zoom, double-tap to zoom in.
 
 A link can choose what the viewer opens on. `ch` is a channel by its chip
 label (any case), `dur` the duration in hours and `nf` the number of frames,
-each one of the menu values; anything else is ignored. For example,
+each one of the menu values, and `ar=1` turns on the region labels; anything
+else is ignored. For example,
 <https://sun-data.github.io/solar-movie-viewer/?ch=DEM> opens on the DEM, and
-<https://sun-data.github.io/solar-movie-viewer/?ch=171&dur=24&nf=96> on a day
-of AIA 171.
+<https://sun-data.github.io/solar-movie-viewer/?ch=171&dur=24&nf=96&ar=1> on
+a labeled day of AIA 171.
+
+## Region labels
+
+The labels come from the daily Solar Region Summaries of the NOAA Space
+Weather Prediction Center, which it publishes for the last 30 days as
+[JSON](https://services.swpc.noaa.gov/json/solar_regions.json). Every
+numbered region is labeled, with or without sunspots, by its full number
+(NOAA reports 14551 as 4551). A dot marks the reported position and the
+number sits just north of it.
+
+Each summary gives positions at 24:00 UT, to the nearest degree, so a frame
+is labeled from the last summary before its UT day, rotated on to the frame
+time at the same rates as Track rotation. Hence a label can step by a few
+arcsec at 00 UT when the next summary takes over, a region numbered today is
+labeled from tomorrow, and a region behind the limb is left off. With
+tracking on, the labels stay with the de-rotated disk.
 
 ## DEM channel
 
