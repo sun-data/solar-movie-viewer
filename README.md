@@ -29,6 +29,13 @@ last 48 hours.
   where it is.
 * Drag to pan, pinch or scroll to zoom, double-tap to zoom in.
 
+A link can choose what the viewer opens on. `ch` is a channel by its chip
+label (any case), `dur` the duration in hours and `nf` the number of frames,
+each one of the menu values; anything else is ignored. For example,
+<https://sun-data.github.io/solar-movie-viewer/?ch=DEM> opens on the DEM, and
+<https://sun-data.github.io/solar-movie-viewer/?ch=171&dur=24&nf=96> on a day
+of AIA 171.
+
 ## DEM channel
 
 The **DEM** chip shows how much coronal plasma there is at each temperature,
