@@ -106,6 +106,7 @@
     <button id="hdBtn" class="mini">Sharpen view</button>
     <button id="fitBtn" class="mini">Fit disk</button>
     <button id="trackBtn" class="mini">Track rotation</button>
+    <button id="labelBtn" class="mini">Label regions</button>
   </div>
   <div id="status"></div>
 </div>
@@ -154,7 +155,8 @@ const CHANNELS = [
 const API = "https://api.helioviewer.org/v2/takeScreenshot/";
 /* A link can choose what the viewer opens on: ?ch=DEM&dur=48&nf=96 picks the
    channel by its chip label (any case) and the duration and frame count by
-   their menu values. Values not on the chips or menus are ignored. */
+   their menu values, and ?ar=1 turns on the region labels. Values not on the
+   chips or menus are ignored. */
 const PARAMS = new URLSearchParams(location.search);
 /* Where the DEM frames and their manifest live; ?dem=URL points elsewhere,
    such as a local copy. */
@@ -235,6 +237,84 @@ function toggleTrack(){
   }
   document.getElementById("trackBtn").classList.toggle("on", !!track);
   draw();
+}
+
+/* ---------- active region labels ---------- */
+/* NOAA SWPC serves its daily Solar Region Summaries for the last 30 days as
+   JSON, with CORS open. The entry dated D gives every numbered region's
+   heliographic position, to the nearest degree, at 24:00 UT on D: it is the
+   report issued at 00:30 UT the next day. The entry for the current day is
+   still being compiled, so a frame is labeled from the last entry dated
+   before its UT day, rotated on to the frame time at the tracker's rates. A
+   label can step by a few arcsec at 00 UT when the next report takes over,
+   and a region numbered today is labeled from tomorrow. When tracking, the
+   labels go where the regions are at the reference time instead, to stay on
+   the de-rotated disk. Regions behind the limb are left off. */
+const REGIONS = "https://services.swpc.noaa.gov/json/solar_regions.json";
+let labels = false;
+let reports = {};             // UT date -> [{num, lat, lon}], radians, longitude positive west
+
+async function loadRegions(){
+  try {
+    const r = await fetch(REGIONS);
+    if (!r.ok) throw new Error(r.status);
+    const by = {};
+    for (const g of await r.json()){
+      (by[g.observed_date] = by[g.observed_date] || []).push({
+        num: 10000 + g.region,                  // NOAA has counted mod 10000 since 2002
+        lat: g.latitude * Math.PI / 180,
+        lon: -g.longitude * Math.PI / 180});    // reported positive east
+    }
+    reports = by;
+  } catch {
+    labels = false;
+    document.getElementById("labelBtn").classList.remove("on");
+    setStatus("couldn't load the region labels from NOAA");
+  }
+  draw();
+}
+
+/* Fetched afresh each time they are turned on, which is how a page left open
+   picks up the next day's report. */
+function toggleLabels(){
+  labels = !labels;
+  document.getElementById("labelBtn").classList.toggle("on", labels);
+  if (labels) loadRegions();
+  draw();
+}
+
+/* A dot marks each region's reported position and its number sits just north
+   of the dot, clear of the region's core. A number that would
+   overlap one already drawn, as for neighbors foreshortened near the limb,
+   goes under its dot instead, or else stacks further north. */
+function drawLabels(f){
+  const day = f.date.toISOString().slice(0, 10);
+  const d = Object.keys(reports).filter(k => k < day).sort().pop();
+  if (!d) return;
+  const when = track || f.date;
+  const days = (when - Date.parse(d + "T00:00:00Z")) / 86400e3 - 1;   // from 24:00 UT on d
+  const b0 = b0Of(when), cb = Math.cos(b0), sb = Math.sin(b0);
+  ctx.font = "600 12px system-ui,-apple-system,\"Segoe UI\",Roboto,sans-serif";
+  ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+  ctx.lineJoin = "round"; ctx.lineWidth = 3;
+  ctx.strokeStyle = "rgba(0,0,0,.75)"; ctx.fillStyle = "#fff";
+  const drawn = [];             // {x, b, w}: center, baseline and width of each number
+  for (const g of reports[d]){
+    const lon = g.lon + rate(g.lat) * days * Math.PI / 180;
+    const cl = Math.cos(g.lat), sl = Math.sin(g.lat);
+    if (sl*sb + cl*cb*Math.cos(lon) <= 0) continue;
+    const x = W/2 + (R_SUN * cl * Math.sin(lon) - view.cx) / view.spp;
+    const y = H/2 - (R_SUN * (sl*cb - cl*sb*Math.cos(lon)) - view.cy) / view.spp;
+    ctx.beginPath(); ctx.arc(x, y, 2, 0, 2*Math.PI);
+    ctx.stroke(); ctx.fill();
+    const w = ctx.measureText(g.num).width + 4;
+    const clear = b => drawn.every(o => Math.abs(o.x - x) > (o.w + w)/2 || Math.abs(o.b - b) > 13);
+    let b = y - 5;
+    for (let k = 1; !clear(b); k++) b = k === 1 ? y + 18 : y - 5 - 13*(k - 1);
+    drawn.push({x, b, w});
+    ctx.strokeText(g.num, x, b);
+    ctx.fillText(g.num, x, b);
+  }
 }
 
 /* ---------- state ---------- */
@@ -357,6 +437,7 @@ function draw(){
   const days = track ? (f.date - track) / 86400e3 : 0;
   if (days) warp(f.img, days, b0Of(track));
   else plain(f.img);
+  if (labels) drawLabels(f);
 }
 
 /* ---------- gestures: pan / pinch / double-tap / wheel ---------- */
@@ -712,6 +793,8 @@ document.getElementById("loadBtn").onclick = loadFullDisk;
 document.getElementById("hdBtn").onclick = sharpenView;
 document.getElementById("fitBtn").onclick = fitDisk;
 document.getElementById("trackBtn").onclick = toggleTrack;
+document.getElementById("labelBtn").onclick = toggleLabels;
+if (PARAMS.get("ar") === "1") toggleLabels();
 document.getElementById("playBtn").onclick = togglePlay;
 document.getElementById("scrub").oninput = e => {
   idx = +e.target.value; playing = false;
