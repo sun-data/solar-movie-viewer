@@ -64,16 +64,22 @@ temperature and every frame, so brightness and color compare across the disk
 and across the whole window. The key beside or under the disk gives the
 scale; it hides with the controls.
 
-These frames are not from Helioviewer. An hourly job fetches the AIA
-near-real-time synoptic images from JSOC (six coronal passbands, 2.4
-arcsec/pixel), inverts every 12-minute slot with `utu.dem.plowman`, colors
-the result with `colorsynth`, and publishes the last 48 hours as full-disk
-JPEGs plus a manifest. Hence some differences from the other channels:
+These frames are not from Helioviewer. A job that runs every 15 minutes
+fetches the AIA near-real-time synoptic images from JSOC (six coronal
+passbands, 2.4 arcsec/pixel), inverts every 3-minute slot with
+`utu.dem.plowman`, colors the result with `colorsynth`, and publishes the
+last 48 hours as full-disk JPEGs plus a manifest. Hence some differences from
+the other channels:
 
-* the window ends on the newest DEM frame, up to about an hour and a quarter
-  behind real time, rather than now;
-* the frame count is an upper limit, met by taking every k-th frame so the
-  spacing stays even;
+* the window ends on the newest DEM frame rather than now. JSOC posts each
+  image about 11 minutes after it is taken, so that is usually around half
+  an hour behind real time, and more when GitHub runs the job late;
+* the frames are a whole number of 3-minute slots apart, so the movie is
+  always evenly spaced, but where the duration over the frame count is not
+  a whole number of slots, it gets more frames than asked for: 120 frames
+  every 3 minutes for 96 frames over 6 hours, 60 every 6 minutes for 48
+  over 6 hours, and 120 every 6 minutes for 96 over 12 hours. Where frames
+  are missing, as while the job is catching up, it gets fewer;
 * the resolution menu chooses between the 512 and 1024 pixel frames, and
   Sharpen view has nothing finer than 2.4 arcsec/pixel to fetch.
 
