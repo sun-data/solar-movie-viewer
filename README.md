@@ -74,9 +74,12 @@ the other channels:
 * the window ends on the newest DEM frame rather than now. JSOC posts each
   image about 11 minutes after it is taken, so that is usually around half
   an hour behind real time, and more when GitHub runs the job late;
-* each frame is the one nearest its place in the even spacing, so frames
-  can be up to 1.5 minutes off it; where frames are missing, the movie has
-  fewer frames than asked for;
+* the frames are a whole number of 3-minute slots apart, so the movie is
+  always evenly spaced, but where the duration over the frame count is not
+  a whole number of slots, it gets more frames than asked for: 120 frames
+  every 3 minutes for 96 frames over 6 hours, 60 every 6 minutes for 48
+  over 6 hours, and 120 every 6 minutes for 96 over 12 hours. Where frames
+  are missing, as while the job is catching up, it gets fewer;
 * the resolution menu chooses between the 512 and 1024 pixel frames, and
   Sharpen view has nothing finer than 2.4 arcsec/pixel to fetch.
 
