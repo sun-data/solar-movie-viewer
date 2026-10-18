@@ -49,7 +49,7 @@
   #scrub{flex:1;accent-color:var(--accent)}
   input[type=range]{height:28px}
   #row2{display:flex;align-items:center;gap:10px;margin-top:4px;font-size:12px;color:var(--dim)}
-  #stamp{flex:1}
+  #stamp{flex:1;white-space:pre-line;line-height:1.35;min-height:2.7em}
   #fps{width:90px;accent-color:var(--accent)}
   .mini{padding:4px 9px;font-size:12px;border-radius:7px}
   .mini.on{background:var(--accent);border-color:transparent;color:#000;font-weight:600}
@@ -518,11 +518,41 @@ function loadImage(src){
   });
 }
 
-/* Evenly spaced times over the chosen window, ending now. */
-function recent(){
+/* Helioviewer's JSON answers carry no CORS header, so fetch can't read them,
+   but it wraps them in a callback on request (JSONP), which a script element
+   can load. */
+function jsonp(url){
+  return new Promise((res, rej) => {
+    const name = "hv" + Math.random().toString(36).slice(2);
+    const s = document.createElement("script");
+    const done = () => { clearTimeout(timer); window[name] = () => {}; s.remove(); };
+    const timer = setTimeout(() => { done(); rej(new Error("timeout")); }, 10e3);
+    window[name] = v => { done(); res(v); };
+    s.onerror = () => { done(); rej(new Error("load failed")); };
+    s.src = url + "&callback=" + name;
+    document.head.appendChild(s);
+  });
+}
+
+/* The time of the newest image Helioviewer has of the channel. Its ingest
+   runs behind real time, tens of minutes for AIA and at times hours for HMI,
+   and a movie ending now would repeat that image in every frame after it,
+   each stamped with a time it was not taken. Now, if Helioviewer doesn't
+   say. */
+async function newest(){
+  try {
+    const r = await jsonp("https://api.helioviewer.org/v2/getClosestImage/?date="
+      + new Date().toISOString().replace(/\.\d{3}Z$/, "Z") + "&sourceId=" + chan.id);
+    const t = Date.parse(r.date.replace(" ", "T") + "Z");
+    if (Number.isFinite(t)) return Math.min(t, Date.now());
+  } catch {}
+  return Date.now();
+}
+
+/* Evenly spaced times over the chosen window, ending at `end`. */
+function recent(end){
   const n = +document.getElementById("nf").value;
   const hours = +document.getElementById("dur").value;
-  const end = Date.now();
   const step = hours * 3600e3 / (n - 1);
   return Array.from({length:n}, (_, i) => new Date(end - (n-1-i) * step));
 }
@@ -593,8 +623,12 @@ async function loadSequence(newMeta, label, dates, urls){
   if (BENCH) runBench();
 }
 
-function loadFrames(m, label){
-  const dates = recent();
+async function loadFrames(m, label){
+  const token = ++loadToken;
+  setStatus(label);
+  const end = await newest();
+  if (token !== loadToken) return;
+  const dates = recent(end);
   loadSequence(m, label + memWarn(dates.length, m.w, m.h), dates,
     dates.map(d => urlFor(d, m.scale, m.cx, m.cy, m.w, m.h)));
 }
@@ -703,12 +737,18 @@ function tick(t){
   }
   requestAnimationFrame(tick);
 }
+/* The frame time in UT, and under it in the viewer's own time zone with how
+   long ago that was, which moves on while paused too. */
 function updateStamp(){
   const f = frameAt(idx);
   if (!f) return;
+  const min = Math.max(0, Math.floor((Date.now() - f.date) / 60e3));
   document.getElementById("stamp").textContent =
-    chan.name + " \u00b7 " + f.date.toISOString().slice(0, 16).replace("T", " ") + " UT";
+    chan.name + " \u00b7 " + f.date.toISOString().slice(0, 16).replace("T", " ") + " UT\n"
+    + f.date.toLocaleString([], {weekday:"short", hour:"numeric", minute:"2-digit", timeZoneName:"short"})
+    + " \u00b7 " + (min < 60 ? "" : Math.floor(min / 60) + " h ") + min % 60 + " min ago";
 }
+setInterval(updateStamp, 20e3);
 
 /* ---------- benchmark ---------- */
 /* Load with ?bench to time the render path once frames are in, on this device

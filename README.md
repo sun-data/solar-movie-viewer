@@ -17,7 +17,12 @@ last 48 hours.
 * **Duration / frames / resolution** control the time window, the number of
   frames requested, and the pixel size of each frame. Requesting many large
   frames can use a lot of memory, so the status line warns when the decoded
-  sequence is likely to exceed what a phone browser will tolerate.
+  sequence is likely to exceed what a phone browser will tolerate. The
+  window ends at the newest image Helioviewer has of the channel, which is
+  behind real time by its ingest: tens of minutes for AIA, at times hours
+  for HMI.
+* **The stamp** under the scrubber gives the time of the frame in UT and,
+  under that, in your own time zone, with how long ago it was taken.
 * **Fit disk** resets the view to the full solar disk.
 * **Sharpen view** re-requests the current sequence at the plate scale of the
   region you have zoomed into, down to the 0.6 arcsec/pixel AIA native scale.
