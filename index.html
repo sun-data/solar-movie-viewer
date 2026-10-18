@@ -606,14 +606,17 @@ function loadFullDisk(){
 }
 
 /* The DEM channel is baked rather than requested. A scheduled job inverts
-   the JSOC AIA synoptic images (2.4 arcsec/px, every 12 minutes) with
+   the JSOC AIA synoptic images (2.4 arcsec/px, every 3 minutes) with
    utu.dem.plowman, colors them with colorsynth (hue for temperature,
    brightness for DEM, on one fixed scale for every frame), and publishes the
    last 48 hours as full-disk JPEGs at a few sizes plus a manifest. So the
-   window ends on the newest frame rather than now, the size is the smallest
-   one at least `px` across, and the frame count is a cap met by taking every
-   k-th frame, which keeps the spacing even. The manifest changes every hour,
-   so it is refetched on every load; the frames never change once written. */
+   window ends on the newest frame rather than now, and the size is the
+   smallest one at least `px` across. Each of the evenly spaced times gets
+   the frame nearest it, at most 1.5 minutes off once the window is filled
+   in; where frames are missing, as while the job is catching up, two times
+   can share a frame and it is shown once. The manifest changes every 15
+   minutes, so it is refetched on every load; the frames never change once
+   written. */
 async function loadDem(px){
   const token = ++loadToken;
   setStatus("loading DEM manifest");
@@ -633,10 +636,14 @@ async function loadDem(px){
   const level = sizes.find(s => m.size[s] >= px) || sizes[sizes.length-1];
   const n = +document.getElementById("nf").value;
   const hours = +document.getElementById("dur").value;
-  const end = Date.parse(m.frames[m.frames.length-1].time);
-  const span = m.frames.filter(f => Date.parse(f.time) >= end - hours * 3600e3);
-  const k = Math.ceil(span.length / n);
-  const picked = span.filter((_, i) => (span.length - 1 - i) % k === 0);
+  const times = m.frames.map(f => Date.parse(f.time));
+  const end = times[times.length-1], step = hours * 3600e3 / (n - 1);
+  const picked = [];
+  for (let i = 0, j = 0; i < n; i++){
+    const t = end - (n-1-i) * step;
+    while (j + 1 < times.length && Math.abs(times[j+1] - t) <= Math.abs(times[j] - t)) j++;
+    if (picked[picked.length-1] !== m.frames[j]) picked.push(m.frames[j]);
+  }
   const preset = m.presets[0];
   document.getElementById("cbarTall").src = new URL(preset.colorbar, DEM_BASE).href;
   document.getElementById("cbarWide").srcset = new URL(preset.colorbar_wide, DEM_BASE).href;
